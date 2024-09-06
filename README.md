@@ -78,13 +78,11 @@ class ProductSerializer(serializers.ModelSerializer):
 ```sh
 # products/views.py
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from rest_framework import generics
 from .models import Product
 from .serializers import ProductSerializer
-from rest_framework.response import Response
-from rest_framework import status
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
 
 class ProductCreateView(generics.CreateAPIView):
     queryset = Product.objects.all()
@@ -93,13 +91,17 @@ class ProductCreateView(generics.CreateAPIView):
     def perform_create(self, serializer):
         product = serializer.save()
 
-        # Gửi thông báo WebSocket
+        # Gửi thông báo WebSocket sau khi tạo thành công sản phẩm
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
-            'product_group',
+            'product_group',  # Group WebSocket client đã tham gia
             {
                 'type': 'send_product_notification',
-                'message': f'Product {product.name} has been created successfully!',
+                'message': {
+                    'name': product.name,
+                    'price': str(product.price),  # Đảm bảo kiểu dữ liệu hợp lệ
+                    'description': product.description,
+                }
             }
         )
 ```
@@ -148,7 +150,7 @@ class ProductConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.group_name = 'product_group'
 
-        # Tham gia nhóm product
+        # Tham gia nhóm 'product_group'
         await self.channel_layer.group_add(
             self.group_name,
             self.channel_name
@@ -156,17 +158,17 @@ class ProductConsumer(AsyncWebsocketConsumer):
         await self.accept()
 
     async def disconnect(self, close_code):
-        # Rời khỏi nhóm product
+        # Rời khỏi nhóm 'product_group'
         await self.channel_layer.group_discard(
             self.group_name,
             self.channel_name
         )
 
-    # Nhận thông báo từ group_send
+    # Hàm này nhận sự kiện từ 'group_send' và gửi dữ liệu tới client
     async def send_product_notification(self, event):
         message = event['message']
 
-        # Gửi tin nhắn đến WebSocket client
+        # Gửi dữ liệu sản phẩm tới WebSocket client
         await self.send(text_data=json.dumps({
             'message': message
         }))
